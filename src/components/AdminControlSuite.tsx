@@ -691,8 +691,9 @@ export const AdminControlSuite: React.FC<AdminControlSuiteProps> = ({
     return `منذ ${diffDays} يوماً`;
   };
 
-  // Filtered logs
+  // Filtered logs (word_filter events belong exclusively to the dedicated filterAlerts tab)
   const filteredLogs = monitorLogs.filter((log) => {
+    if (log.type === 'word_filter') return false;
     if (logTypeFilter === 'kick_ban' && !['kick', 'ban'].includes(log.type)) return false;
     if (logTypeFilter === 'mute' && log.type !== 'mute') return false;
     if (logTypeFilter === 'mic' && !['mic_take', 'mic_drop', 'mic_pull'].includes(log.type)) return false;

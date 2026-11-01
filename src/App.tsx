@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useRef, lazy, Suspense, useMemo, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import {
   Mic,
@@ -530,9 +530,9 @@ export default function App() {
   };
 
   // Auto prune stale PM typing indicators
+  const pmTypingCount = Object.keys(pmTypingUsers).length;
   useEffect(() => {
-    const keys = Object.keys(pmTypingUsers);
-    if (keys.length === 0) return;
+    if (pmTypingCount === 0) return;
     const interval = setInterval(() => {
       const now = Date.now();
       setPmTypingUsers((prev) => {
@@ -548,7 +548,7 @@ export default function App() {
       });
     }, 1000);
     return () => clearInterval(interval);
-  }, [pmTypingUsers]);
+  }, [pmTypingCount]);
 
   // Mobile Back Button accidental exit prevention modal (تأكيد مغادرة الشات عند الضغط على زر رجوع الهاتف)
   const [showExitConfirmModal, setShowExitConfirmModal] = useState<boolean>(false);
@@ -982,9 +982,13 @@ export default function App() {
     }
   });
 
+  const ignoredUsersSet = useMemo(() => {
+    return new Set(ignoredUsers.map((u) => u.toLowerCase().trim()));
+  }, [ignoredUsers]);
+
   const isUserIgnored = (username?: string) => {
     if (!username) return false;
-    return ignoredUsers.includes(username.toLowerCase().trim());
+    return ignoredUsersSet.has(username.toLowerCase().trim());
   };
 
   // Mega Suite & Creative Features State (ميزات حسان برو الإبداعية الـ 50+)
@@ -1064,6 +1068,33 @@ export default function App() {
   });
   const [isPoetryMode, setIsPoetryMode] = useState<boolean>(false);
   const [chatSearchQuery, setChatSearchQuery] = useState<string>('');
+
+  // Memoized current room messages with performance windowing (prevents sluggish typing & input lag)
+  const displayRoomMessages = useMemo(() => {
+    const currentRoom = currentUser?.room ? currentUser.room.trim().toLowerCase() : null;
+    const searchQ = chatSearchQuery.trim().toLowerCase();
+    const currentUsername = currentUser?.username ? currentUser.username.toLowerCase() : null;
+
+    const filtered = messages.filter((msg) => {
+      if (!msg) return false;
+      if (ignoredUsersSet.has(msg.username.toLowerCase().trim())) return false;
+      if (currentRoom && msg.room && msg.room.trim().toLowerCase() !== currentRoom) {
+        return false;
+      }
+      if (filterOnlyMentions && currentUsername) {
+        const textLower = msg.text ? msg.text.toLowerCase() : '';
+        if (!textLower.includes(`@${currentUsername}`)) return false;
+      }
+      if (searchQ) {
+        const textMatch = msg.text && msg.text.toLowerCase().includes(searchQ);
+        const userMatch = msg.username.toLowerCase().includes(searchQ);
+        if (!textMatch && !userMatch) return false;
+      }
+      return true;
+    });
+
+    return filtered.length > 250 ? filtered.slice(filtered.length - 250) : filtered;
+  }, [messages, currentUser?.room, currentUser?.username, chatSearchQuery, filterOnlyMentions, ignoredUsersSet]);
   const [pinnedChatMessage, setPinnedChatMessage] = useState<{ id: string; username: string; text: string } | null>(null);
   const [particlesEnabled, setParticlesEnabled] = useState<boolean>(() => {
     try {
@@ -3983,36 +4014,59 @@ export default function App() {
     }
   };
 
-  // Helper to resolve a member's banner anywhere across the app (غرفة، حائط، خاص، مايكات، زوار...)
+  // High-performance O(1) indexed maps for instant avatar and banner lookups (prevents UI lagging & typing freezes)
+  const userBannerMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (let i = 0; i < allRegisteredMembers.length; i++) {
+      const m = allRegisteredMembers[i];
+      if (m.nameBannerUrl) map.set(m.username.trim().toLowerCase(), m.nameBannerUrl);
+    }
+    for (let i = 0; i < allConnectedUsers.length; i++) {
+      const u = allConnectedUsers[i];
+      if (u.nameBannerUrl) map.set(u.username.trim().toLowerCase(), u.nameBannerUrl);
+    }
+    for (let i = 0; i < rosterUsers.length; i++) {
+      const u = rosterUsers[i];
+      if (u.nameBannerUrl) map.set(u.username.trim().toLowerCase(), u.nameBannerUrl);
+    }
+    if (currentUser?.nameBannerUrl) {
+      map.set(currentUser.username.trim().toLowerCase(), currentUser.nameBannerUrl);
+    }
+    return map;
+  }, [allRegisteredMembers, allConnectedUsers, rosterUsers, currentUser?.nameBannerUrl, currentUser?.username]);
+
+  const userAvatarMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (let i = 0; i < allRegisteredMembers.length; i++) {
+      const m = allRegisteredMembers[i];
+      if (m.avatarUrl) map.set(m.username.trim().toLowerCase(), m.avatarUrl);
+    }
+    for (let i = 0; i < allConnectedUsers.length; i++) {
+      const u = allConnectedUsers[i];
+      if (u.avatarUrl) map.set(u.username.trim().toLowerCase(), u.avatarUrl);
+    }
+    for (let i = 0; i < rosterUsers.length; i++) {
+      const u = rosterUsers[i];
+      if (u.avatarUrl) map.set(u.username.trim().toLowerCase(), u.avatarUrl);
+    }
+    if (currentUser?.avatarUrl) {
+      map.set(currentUser.username.trim().toLowerCase(), currentUser.avatarUrl);
+    }
+    return map;
+  }, [allRegisteredMembers, allConnectedUsers, rosterUsers, currentUser?.avatarUrl, currentUser?.username]);
+
+  // Helper to resolve a member's banner anywhere across the app (O(1) instant lookup)
   const getUserBanner = (username?: string, fallbackUrl?: string): string | undefined => {
     if (!username) return fallbackUrl;
     const clean = username.trim().toLowerCase();
-    if (currentUser && currentUser.username.trim().toLowerCase() === clean && currentUser.nameBannerUrl) {
-      return currentUser.nameBannerUrl;
-    }
-    const inRoster = rosterUsers.find((u) => u.username.trim().toLowerCase() === clean);
-    if (inRoster?.nameBannerUrl) return inRoster.nameBannerUrl;
-    const inAll = allConnectedUsers.find((u) => u.username.trim().toLowerCase() === clean);
-    if (inAll?.nameBannerUrl) return inAll.nameBannerUrl;
-    const inReg = allRegisteredMembers.find((m) => m.username.trim().toLowerCase() === clean);
-    if (inReg?.nameBannerUrl) return inReg.nameBannerUrl;
-    return fallbackUrl || undefined;
+    return userBannerMap.get(clean) || fallbackUrl || undefined;
   };
 
-  // Helper to resolve a member's avatar photo anywhere across the app
+  // Helper to resolve a member's avatar photo anywhere across the app (O(1) instant lookup)
   const getUserAvatar = (username?: string, fallbackUrl?: string): string => {
     if (!username) return fallbackUrl || falconIcon;
     const clean = username.trim().toLowerCase();
-    if (currentUser && currentUser.username.trim().toLowerCase() === clean && currentUser.avatarUrl) {
-      return currentUser.avatarUrl;
-    }
-    const inRoster = rosterUsers.find((u) => u.username.trim().toLowerCase() === clean);
-    if (inRoster?.avatarUrl) return inRoster.avatarUrl;
-    const inAll = allConnectedUsers.find((u) => u.username.trim().toLowerCase() === clean);
-    if (inAll?.avatarUrl) return inAll.avatarUrl;
-    const inReg = allRegisteredMembers.find((m) => m.username.trim().toLowerCase() === clean);
-    if (inReg?.avatarUrl) return inReg.avatarUrl;
-    return fallbackUrl || falconIcon;
+    return userAvatarMap.get(clean) || fallbackUrl || falconIcon;
   };
 
   // Open profile modal by username directly
@@ -7068,32 +7122,7 @@ export default function App() {
             style={{ fontFamily: FONTS_LIST.find((f) => f.id === fontFamily)?.family || 'Cairo, sans-serif' }}
           >
           {/* Message Stream */}
-          {(() => {
-            const currentRoom = currentUser?.room ? currentUser.room.trim().toLowerCase() : null;
-            const searchQ = chatSearchQuery.trim().toLowerCase();
-            const currentUsername = currentUser?.username ? currentUser.username.toLowerCase() : null;
-
-            const filtered = messages.filter((msg) => {
-              if (isUserIgnored(msg.username)) return false;
-              if (currentRoom && msg.room && msg.room.trim().toLowerCase() !== currentRoom) {
-                return false;
-              }
-              if (filterOnlyMentions && currentUsername) {
-                const textLower = msg.text ? msg.text.toLowerCase() : '';
-                if (!textLower.includes(`@${currentUsername}`)) return false;
-              }
-              if (searchQ) {
-                const textMatch = msg.text && msg.text.toLowerCase().includes(searchQ);
-                const userMatch = msg.username.toLowerCase().includes(searchQ);
-                if (!textMatch && !userMatch) return false;
-              }
-              return true;
-            });
-
-            // Smooth performance windowing: render up to latest 250 messages on mobile to keep DOM responsive
-            const displayList = filtered.length > 250 ? filtered.slice(filtered.length - 250) : filtered;
-
-            return displayList.map((msg, idx) => {
+          {displayRoomMessages.map((msg, idx) => {
             const isAlertMessage = Boolean(msg.badge && (msg.badge.includes('إشعار عام') || msg.badge.includes('إعلان')));
             const isMentioned = Boolean(
               currentUser &&
@@ -7651,7 +7680,7 @@ export default function App() {
                 </div>
               </div>
             );
-          })})()}
+          })}
           <div ref={messagesEndRef} />
         </div>
         {/* Floating Jump to Latest Messages Button */}

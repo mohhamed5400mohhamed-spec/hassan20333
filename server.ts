@@ -1992,22 +1992,7 @@ function checkAndLogMonitoredWords(
       }
     });
 
-    const placeDesc =
-      context.type === 'pm'
-        ? `في الخاص إلى [${context.targetName}]`
-        : context.type === 'wall_post'
-        ? 'في منشور بالحائط'
-        : context.type === 'wall_comment'
-        ? `في تعليق بالحائط على [${context.targetName}]`
-        : `في الغرفة [${context.targetName || sender.room}]`;
-
-    logMonitorEvent(
-      'word_filter',
-      `التقط الفلتر ${placeDesc} كلمات محظورة [${detectedBadWords.join(', ')}] من [${sender.username}]: "${clean}"`,
-      sender.username,
-      context.targetName
-    );
-
+    // Note: Filter detections are recorded in filterAlerts (سجل تنبيهات الفلتر) and not in the main administrative events log
     // Automated IP Ban Trigger based on Filter Violations Frequency
     if (serverSecurity.autoIpBanEnabled && sender.role !== 'admin' && sender.role !== 'super') {
       const senderIp = sender.ipAddress || sender.ip;
