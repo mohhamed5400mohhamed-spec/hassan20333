@@ -123,6 +123,7 @@ export interface MonitorEvent {
   actor: string;
   target?: string;
   time: string;
+  timestamp?: number;
 }
 
 export interface ServerSecuritySettings {
@@ -609,6 +610,87 @@ export const AdminControlSuite: React.FC<AdminControlSuiteProps> = ({
     return true;
   });
 
+  // Live periodic ticker (updates relative times like "منذ دقيقة", "منذ 5 دقائق" live every 30s)
+  const [, setLogTimeTicker] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setLogTimeTicker((prev) => prev + 1);
+    }, 30000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Format log relative time in accurate Arabic (الآن، منذ دقيقة، منذ دقيقتين، منذ X دقائق، منذ ساعة، إلخ)
+  const formatLogRelativeTime = (timestamp?: number, fallbackTime?: string, id?: string): string => {
+    let effectiveTs = timestamp;
+    if (!effectiveTs && id && id.startsWith('log-')) {
+      const parts = id.split('-');
+      const parsed = Number(parts[1]);
+      if (parsed && !isNaN(parsed)) effectiveTs = parsed;
+    }
+
+    if (!effectiveTs && fallbackTime) {
+      try {
+        const parts = fallbackTime.replace(/[^\d:صمAPMapm]/g, '').trim().split(':');
+        if (parts.length >= 2) {
+          const d = new Date();
+          let hours = parseInt(parts[0], 10);
+          const minutes = parseInt(parts[1], 10);
+          const seconds = parts[2] ? parseInt(parts[2], 10) : 0;
+          if (fallbackTime.includes('م') || fallbackTime.toLowerCase().includes('pm')) {
+            if (hours < 12) hours += 12;
+          } else if (fallbackTime.includes('ص') || fallbackTime.toLowerCase().includes('am')) {
+            if (hours === 12) hours = 0;
+          }
+          d.setHours(hours, minutes, seconds, 0);
+          if (d.getTime() > Date.now() + 60000) {
+            d.setDate(d.getDate() - 1);
+          }
+          effectiveTs = d.getTime();
+        }
+      } catch {}
+    }
+
+    if (!effectiveTs || isNaN(effectiveTs) || effectiveTs <= 0) {
+      return fallbackTime || 'الآن';
+    }
+
+    const now = Date.now();
+    const diffSec = Math.max(0, Math.floor((now - effectiveTs) / 1000));
+
+    // أقل من دقيقة
+    if (diffSec < 60) {
+      return 'الآن';
+    }
+
+    const diffMin = Math.floor(diffSec / 60);
+
+    // أقل من ساعة
+    if (diffMin < 60) {
+      if (diffMin === 1) return 'منذ دقيقة';
+      if (diffMin === 2) return 'منذ دقيقتين';
+      if (diffMin >= 3 && diffMin <= 10) return `منذ ${diffMin} دقائق`;
+      return `منذ ${diffMin} دقيقة`;
+    }
+
+    const diffHours = Math.floor(diffMin / 60);
+
+    // أقل من 24 ساعة
+    if (diffHours < 24) {
+      if (diffHours === 1) return 'منذ ساعة';
+      if (diffHours === 2) return 'منذ ساعتين';
+      if (diffHours >= 3 && diffHours <= 10) return `منذ ${diffHours} ساعات`;
+      return `منذ ${diffHours} ساعة`;
+    }
+
+    const diffDays = Math.floor(diffHours / 24);
+
+    // أيام
+    if (diffDays === 1) return 'منذ يوم';
+    if (diffDays === 2) return 'منذ يومين';
+    if (diffDays >= 3 && diffDays <= 10) return `منذ ${diffDays} أيام`;
+    return `منذ ${diffDays} يوماً`;
+  };
+
   // Filtered logs
   const filteredLogs = monitorLogs.filter((log) => {
     if (logTypeFilter === 'kick_ban' && !['kick', 'ban'].includes(log.type)) return false;
@@ -636,7 +718,7 @@ export const AdminControlSuite: React.FC<AdminControlSuiteProps> = ({
     }
     const textContent =
       `سجل الرقابة الإدارية - شات حسان برو\nتاريخ التصدير: ${new Date().toLocaleString('ar-EG')}\n==============================\n\n` +
-      monitorLogs.map((l) => `[${l.time}] (${l.type.toUpperCase()}) ${l.description}`).join('\n');
+      monitorLogs.map((l) => `[${l.time}] (${formatLogRelativeTime(l.timestamp, l.time, l.id)}) (${l.type.toUpperCase()}) ${l.description}`).join('\n');
     const blob = new Blob([textContent], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -2834,8 +2916,13 @@ export const AdminControlSuite: React.FC<AdminControlSuiteProps> = ({
                               <span>{alert.username}</span>
                               <span>{alert.flag || '🇸🇦'}</span>
                             </div>
-                            <div className="text-[10px] text-slate-400 font-mono">
-                              غرفة: {alert.room} • {alert.time}
+                            <div className="text-[10px] text-slate-400 font-mono flex items-center gap-1.5 flex-wrap">
+                              <span>غرفة: {alert.room}</span>
+                              <span>•</span>
+                              <span>[{alert.time}]</span>
+                              <span className="text-rose-300 font-sans font-bold bg-rose-500/15 border border-rose-500/30 px-1.5 py-0.2 rounded-md">
+                                ({formatLogRelativeTime(alert.timestamp, alert.time)})
+                              </span>
                             </div>
                           </div>
                         </div>
@@ -3446,13 +3533,21 @@ export const AdminControlSuite: React.FC<AdminControlSuiteProps> = ({
               filteredLogs.map((log) => (
                 <div
                   key={log.id}
-                  className="p-2 rounded-lg bg-slate-800/90 border border-slate-700 flex items-start justify-between gap-2"
+                  className="p-2.5 rounded-xl bg-slate-800/90 border border-slate-700/80 hover:border-amber-500/40 flex items-start justify-between gap-2.5 transition-colors shadow-xs"
                 >
-                  <div className="min-w-0">
-                    <span className="text-[10px] font-bold text-amber-400 block mb-0.5">[{log.time}]</span>
-                    <span className="text-slate-200 leading-relaxed">{log.description}</span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                      <span className="text-[10px] font-bold text-amber-400 font-mono">
+                        [{log.time}]
+                      </span>
+                      <span className="text-[10px] font-sans font-bold text-amber-300 bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.2 rounded-md flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-amber-400 shrink-0" />
+                        <span>({formatLogRelativeTime(log.timestamp, log.time, log.id)})</span>
+                      </span>
+                    </div>
+                    <span className="text-slate-200 leading-relaxed font-sans text-xs break-words">{log.description}</span>
                   </div>
-                  <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-900 text-slate-400 flex-shrink-0 font-bold uppercase">
+                  <span className="text-[9px] px-2 py-0.5 rounded-md bg-slate-900 border border-slate-700 text-amber-400 flex-shrink-0 font-bold font-mono uppercase">
                     {log.type}
                   </span>
                 </div>

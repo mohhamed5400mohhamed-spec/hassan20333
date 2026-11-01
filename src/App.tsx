@@ -2579,7 +2579,8 @@ export default function App() {
     });
 
     s.on('monitorEvent', (event: MonitorEvent) => {
-      setMonitorLogs((prev) => [event, ...prev.slice(0, 199)]);
+      const safeEvent: MonitorEvent = { ...event, timestamp: event.timestamp || Date.now() };
+      setMonitorLogs((prev) => [safeEvent, ...prev.slice(0, 199)]);
     });
 
     s.on('criticalGlobalBroadcast', (data: { id: string; title: string; text: string; sender: string; senderRole: string; time: string }) => {
@@ -2978,7 +2979,11 @@ export default function App() {
     });
 
     s.on('monitorLogs', (logs: MonitorEvent[]) => {
-      setMonitorLogs(logs);
+      const safeLogs = (logs || []).map((l) => ({
+        ...l,
+        timestamp: l.timestamp || Date.now()
+      }));
+      setMonitorLogs(safeLogs);
     });
 
     s.on('systemAlert', (msg: string) => {

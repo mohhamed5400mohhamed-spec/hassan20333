@@ -224,4 +224,5 @@ export interface MonitorEvent {
   actor: string;
   target?: string;
   time: string;
+  timestamp?: number;
 }
