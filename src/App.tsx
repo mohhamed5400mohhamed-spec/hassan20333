@@ -7528,16 +7528,16 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Snug Message Bubble (تناسق مربع الرسالة حسب الشكل المختار) */}
-                  <div className={`inline-block w-fit max-w-[85%] sm:max-w-[78%] text-right px-3 py-1.5 transition-all [overflow-wrap:anywhere] break-words ${
+                  {/* Snug Message Bubble (تمتد بكامل العرض لمقابلة زر الثلاث نقاط بالأعلى) */}
+                  <div className={`block w-full max-w-full text-right px-3.5 py-2 transition-all [overflow-wrap:anywhere] break-words shadow-2xs ${
                     isAlertMessage
                       ? 'rounded-2xl bg-amber-100/95 text-amber-950 border border-amber-300 shadow-sm'
                       : isMentioned
                       ? 'rounded-2xl bg-rose-50 text-rose-950 border border-rose-300 ring-2 ring-rose-200 shadow-sm'
                       : bubbleStyle === 'pill'
                       ? currentUser && msg.username === currentUser.username
-                        ? 'rounded-full shadow-sm px-4 py-1.5 bg-amber-50/95 text-slate-900 border border-amber-300/80'
-                        : 'rounded-full shadow-sm px-4 py-1.5 bg-white text-slate-900 border border-slate-200/90'
+                        ? 'rounded-2xl sm:rounded-3xl shadow-sm px-4 py-2 bg-amber-50/95 text-slate-900 border border-amber-300/80'
+                        : 'rounded-2xl sm:rounded-3xl shadow-sm px-4 py-2 bg-white text-slate-900 border border-slate-200/90'
                       : bubbleStyle === 'classic'
                       ? currentUser && msg.username === currentUser.username
                         ? 'rounded-xs border-2 border-amber-300 shadow-sm font-medium bg-amber-50/90 text-slate-900'
@@ -7602,7 +7602,7 @@ export default function App() {
                             return <span>@{msg.replyTo.username}</span>;
                           })()}
                         </div>
-                        <div className="text-slate-600 truncate max-w-[240px] text-[10px]">
+                        <div className="text-slate-600 truncate max-w-full sm:max-w-md text-[10px]">
                           {msg.replyTo.text || 'مرفق وسائط / صوت 📎'}
                         </div>
                       </div>
