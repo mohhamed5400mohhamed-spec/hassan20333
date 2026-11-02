@@ -630,7 +630,23 @@ export default function App() {
 
   // Unread Wall Posts Counter State (عداد رسائل ومنشورات الحائط الجديدة)
   const [unreadWallCount, setUnreadWallCount] = useState<number>(0);
-  const lastSeenWallTimeRef = useRef<number>(Date.now());
+  const lastSeenWallTimeRef = useRef<number>(
+    typeof window !== 'undefined'
+      ? Number(localStorage.getItem('soqoor_last_seen_wall')) || Date.now()
+      : Date.now()
+  );
+
+  // Automatically mark wall posts as seen and clear badge whenever wall is opened
+  useEffect(() => {
+    if (activeDrawer === 'wall') {
+      const now = Date.now();
+      lastSeenWallTimeRef.current = now;
+      try {
+        localStorage.setItem('soqoor_last_seen_wall', String(now));
+      } catch {}
+      setUnreadWallCount(0);
+    }
+  }, [activeDrawer]);
 
   // Announcement Bar Display Timing (يظهر لعدة ثوانٍ عند الدخول ثم يختفي تلقائياً)
   const [showAnnouncementBar, setShowAnnouncementBar] = useState<boolean>(true);
@@ -800,33 +816,55 @@ export default function App() {
 
   // Mark incoming private messages as read when viewing PM conversation
   useEffect(() => {
-    if (activeDrawer === 'pm' && selectedPmUser && socket) {
-      socket.emit('markPrivateMessagesRead', {
-        partnerUsername: selectedPmUser.username,
-        partnerId: selectedPmUser.id
+    if (activeDrawer === 'pm' && selectedPmUser) {
+      const partnerRaw = selectedPmUser.username || '';
+      const partnerClean = partnerRaw.trim().toLowerCase();
+
+      // Clear unread badge counter for this partner immediately
+      setUnreadPerUser((prev) => {
+        if (!prev[partnerRaw] && !prev[partnerClean]) return prev;
+        const next = { ...prev };
+        const count = (next[partnerRaw] || 0) + (next[partnerClean] || 0);
+        delete next[partnerRaw];
+        delete next[partnerClean];
+        setNotificationCount((c) => Math.max(0, c - count));
+        try {
+          sessionStorage.setItem('soqoor_unread_pm', JSON.stringify(next));
+        } catch {}
+        return next;
       });
+
+      if (socket) {
+        socket.emit('markPrivateMessagesRead', {
+          partnerUsername: selectedPmUser.username,
+          partnerId: selectedPmUser.id
+        });
+      }
+
       setPrivateMessages((prev) => {
         if (!Array.isArray(prev)) return [];
-        const partnerName = selectedPmUser.username.trim().toLowerCase();
         let changed = false;
+        const now = Date.now();
         const updated = prev.map((pm) => {
-          if (pm && pm.fromUsername.trim().toLowerCase() === partnerName && pm.status !== 'read') {
+          if (pm && pm.fromUsername.trim().toLowerCase() === partnerClean && pm.status !== 'read') {
             changed = true;
-            return { ...pm, status: 'read' as const, readAt: Date.now() };
+            return { ...pm, status: 'read' as const, readAt: pm.readAt || now };
           }
           return pm;
         });
         return changed ? updated : prev;
       });
     }
-  }, [activeDrawer, selectedPmUser, socket]);
+  }, [activeDrawer, selectedPmUser, socket, privateMessages.length]);
 
-  // Fetch freshest administrative data (monitor logs, filter words, message ceilings) upon opening monitor drawer
+  // Fetch freshest administrative data (monitor logs, filter alerts, filter words, message ceilings) upon opening monitor drawer
   useEffect(() => {
     if (activeDrawer === 'monitor' && socket && currentUser && (currentUser.role === 'admin' || currentUser.role === 'super')) {
       socket.emit('getMonitorLogs');
+      socket.emit('getFilterAlerts');
       socket.emit('getMonitoredWords');
       socket.emit('getMessageRetentionLimits');
+      socket.emit('getAdminData');
     }
   }, [activeDrawer, socket, currentUser]);
 
@@ -2577,18 +2615,23 @@ export default function App() {
     s.on('privateMessagesRead', ({ byUsername, readAt }: { byUsername: string; readAt: number }) => {
       setPrivateMessages((prev) => {
         const safe = Array.isArray(prev) ? prev : [];
-        const partnerLower = (byUsername || '').trim().toLowerCase();
+        const byLower = (byUsername || '').trim().toLowerCase();
         const myLower = (currentUserRef.current?.username || '').trim().toLowerCase();
         let changed = false;
+        const now = readAt || Date.now();
         const updated = safe.map((pm) => {
-          if (
-            pm &&
-            pm.fromUsername.trim().toLowerCase() === myLower &&
-            pm.toUsername.trim().toLowerCase() === partnerLower &&
-            pm.status !== 'read'
-          ) {
+          if (!pm) return pm;
+          const fromL = (pm.fromUsername || '').trim().toLowerCase();
+          const toL = (pm.toUsername || '').trim().toLowerCase();
+
+          // Condition A: Partner read messages that I sent to them
+          const partnerReadMyMsg = (fromL === myLower && toL === byLower);
+          // Condition B: I read messages that partner sent to me
+          const iReadPartnerMsg = (byLower === myLower && toL === myLower);
+
+          if ((partnerReadMyMsg || iReadPartnerMsg) && pm.status !== 'read') {
             changed = true;
-            return { ...pm, status: 'read' as const, readAt: readAt || Date.now() };
+            return { ...pm, status: 'read' as const, readAt: now };
           }
           return pm;
         });
@@ -2894,12 +2937,16 @@ export default function App() {
           isDocumentVisible &&
           activeDrawerRef.current === 'pm' &&
           selectedPmUserRef.current &&
-          selectedPmUserRef.current.username.toLowerCase() === otherUsername.toLowerCase();
+          selectedPmUserRef.current.username.trim().toLowerCase() === otherUsername.trim().toLowerCase();
 
         if (isCurrentlyViewingThisChat) {
           s.emit('markPrivateMessagesRead', {
             partnerUsername: pm.fromUsername,
             partnerId: pm.fromId
+          });
+          setPrivateMessages((prev) => {
+            const safe = Array.isArray(prev) ? prev : [];
+            return safe.map((m) => (m && m.id === pm.id ? { ...m, status: 'read' as const, readAt: Date.now() } : m));
           });
         } else {
           setUnreadPerUser((prev) => {
@@ -2956,11 +3003,15 @@ export default function App() {
       const safePosts = (posts || []).slice(0, 100);
       setWallPosts(safePosts);
       if (activeDrawerRef.current === 'wall') {
-        lastSeenWallTimeRef.current = Date.now();
+        const now = Date.now();
+        lastSeenWallTimeRef.current = now;
+        try {
+          localStorage.setItem('soqoor_last_seen_wall', String(now));
+        } catch {}
         setUnreadWallCount(0);
       } else {
         const unread = safePosts.filter((p) => (p.timestamp || 0) > lastSeenWallTimeRef.current).length;
-        setUnreadWallCount(unread > 0 ? unread : (safePosts.length > 0 ? 1 : 0));
+        setUnreadWallCount(unread);
       }
     });
 
@@ -3015,6 +3066,19 @@ export default function App() {
         timestamp: l.timestamp || Date.now()
       }));
       setMonitorLogs(safeLogs);
+    });
+
+    s.on('filterAlertsList', (alerts: any[]) => {
+      if (Array.isArray(alerts)) {
+        setFilterAlertsList(alerts);
+      }
+    });
+
+    s.on('newFilterAlert', (alert: any) => {
+      if (!alert) return;
+      setFilterAlertsList((prev) => [alert, ...prev.filter((a) => a.id !== alert.id)].slice(0, 100));
+      sounds.playGeneralAlertPing();
+      showToast(`⚠️ رصد الفلتر مخالفة جديدة من [${alert.username}]`, 'info');
     });
 
     s.on('systemAlert', (msg: string) => {
@@ -10479,7 +10543,11 @@ export default function App() {
                 {/* Messages Stream for this partner exclusively */}
                 <div ref={pmChatContainerRef} className="flex-1 min-h-0 p-3 overflow-y-auto modal-scroll-container overscroll-contain space-y-2">
                   {(Array.isArray(privateMessages) ? privateMessages : [])
-                    .filter((pm) => pm && (pm.fromUsername === selectedPmUser.username || pm.toUsername === selectedPmUser.username))
+                    .filter((pm) => {
+                      if (!pm || !pm.fromUsername || !pm.toUsername) return false;
+                      const pLower = (selectedPmUser.username || '').trim().toLowerCase();
+                      return pm.fromUsername.trim().toLowerCase() === pLower || pm.toUsername.trim().toLowerCase() === pLower;
+                    })
                     .map((pm, idx) => {
                       if (pm.isCallNotification) {
                         return (
@@ -10736,9 +10804,11 @@ export default function App() {
                         </div>
                       );
                     })}
-                  {(Array.isArray(privateMessages) ? privateMessages : []).filter(
-                    (pm) => pm && (pm.fromUsername === selectedPmUser.username || pm.toUsername === selectedPmUser.username)
-                  ).length === 0 && (
+                  {(Array.isArray(privateMessages) ? privateMessages : []).filter((pm) => {
+                    if (!pm || !pm.fromUsername || !pm.toUsername) return false;
+                    const pLower = (selectedPmUser.username || '').trim().toLowerCase();
+                    return pm.fromUsername.trim().toLowerCase() === pLower || pm.toUsername.trim().toLowerCase() === pLower;
+                  }).length === 0 && (
                     <div className="text-center text-slate-400 py-12 text-xs">
                       لا توجد رسائل بينك وبين {selectedPmUser.username} بعد.<br />
                       اكتب رسالتك أو سجل مقطعاً صوتياً لبدء المحادثة المنفردة.
@@ -11127,6 +11197,7 @@ export default function App() {
               staffMemos={staffMemos}
               monitorLogs={monitorLogs}
               monitoredWordsList={monitoredWordsList}
+              filterAlerts={filterAlertsList}
               shortcuts={shortcuts}
               onUpdateLikesSettings={(newLikes) => {
                 setLikesSettings((prev) => ({ ...prev, ...newLikes }));
@@ -11164,6 +11235,10 @@ export default function App() {
               }}
               onClearMonitorLogs={() => {
                 socket?.emit("clearMonitorLogs");
+              }}
+              onClearFilterAlerts={() => {
+                socket?.emit("clearFilterAlerts");
+                setFilterAlertsList([]);
               }}
               onOpenUserProfile={(user) => {
                 openUserProfile(user);

@@ -651,7 +651,7 @@ export const AdminControlSuite: React.FC<AdminControlSuiteProps> = ({
     }
 
     if (!effectiveTs || isNaN(effectiveTs) || effectiveTs <= 0) {
-      return fallbackTime || 'الآن';
+      return 'منذ لحظات';
     }
 
     const now = Date.now();
@@ -659,7 +659,7 @@ export const AdminControlSuite: React.FC<AdminControlSuiteProps> = ({
 
     // أقل من دقيقة
     if (diffSec < 60) {
-      return 'الآن';
+      return 'منذ ثوانٍ';
     }
 
     const diffMin = Math.floor(diffSec / 60);
@@ -2920,9 +2920,12 @@ export const AdminControlSuite: React.FC<AdminControlSuiteProps> = ({
                             <div className="text-[10px] text-slate-400 font-mono flex items-center gap-1.5 flex-wrap">
                               <span>غرفة: {alert.room}</span>
                               <span>•</span>
-                              <span>[{alert.time}]</span>
-                              <span className="text-rose-300 font-sans font-bold bg-rose-500/15 border border-rose-500/30 px-1.5 py-0.2 rounded-md">
-                                ({formatLogRelativeTime(alert.timestamp, alert.time)})
+                              <span
+                                title={alert.time ? `التوقيت الفعلي: ${alert.time}` : undefined}
+                                className="text-rose-300 font-sans font-bold bg-rose-500/15 border border-rose-500/30 px-1.5 py-0.2 rounded-md flex items-center gap-1"
+                              >
+                                <Clock className="w-3 h-3 text-rose-400 shrink-0" />
+                                <span>({formatLogRelativeTime(alert.timestamp, alert.time)})</span>
                               </span>
                             </div>
                           </div>
@@ -3538,10 +3541,10 @@ export const AdminControlSuite: React.FC<AdminControlSuiteProps> = ({
                 >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5 flex-wrap mb-1">
-                      <span className="text-[10px] font-bold text-amber-400 font-mono">
-                        [{log.time}]
-                      </span>
-                      <span className="text-[10px] font-sans font-bold text-amber-300 bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.2 rounded-md flex items-center gap-1">
+                      <span
+                        title={log.time ? `التوقيت الفعلي: ${log.time}` : undefined}
+                        className="text-[10px] font-sans font-bold text-amber-300 bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.2 rounded-md flex items-center gap-1"
+                      >
                         <Clock className="w-3 h-3 text-amber-400 shrink-0" />
                         <span>({formatLogRelativeTime(log.timestamp, log.time, log.id)})</span>
                       </span>

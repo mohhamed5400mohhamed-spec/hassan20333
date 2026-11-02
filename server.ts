@@ -6422,18 +6422,26 @@ io.on('connection', (socket) => {
     const user = users.find((u) => u.id === socket.id);
     if (!user) return;
 
-    const partner = users.find(
+    const partnerLower = (partnerUsername || '').trim().toLowerCase();
+    const partnerSockets = users.filter(
       (u) =>
-        (partnerUsername && u.username.toLowerCase() === partnerUsername.toLowerCase()) ||
+        (partnerLower && u.username.trim().toLowerCase() === partnerLower) ||
         (partnerId && u.id === partnerId)
     );
 
-    if (partner) {
-      io.to(partner.id).emit('privateMessagesRead', {
+    const now = Date.now();
+    partnerSockets.forEach((p) => {
+      io.to(p.id).emit('privateMessagesRead', {
         byUsername: user.username,
-        readAt: Date.now()
+        readAt: now
       });
-    }
+    });
+
+    // Also confirm read status back to the reading socket
+    socket.emit('privateMessagesRead', {
+      byUsername: user.username,
+      readAt: now
+    });
   });
 
   // Like User Profile (مرة واحدة بالدقيقة لكل عضو - يعطيه لايك واحد +1 مع إشعار عائم)
@@ -6607,8 +6615,29 @@ io.on('connection', (socket) => {
 
   // Monitor logs fetch & clear
   socket.on('getMonitorLogs', () => {
+    const admin = users.find((u) => u.id === socket.id);
     socket.emit('monitorLogs', monitorLogs);
     socket.emit('monitoredWordsUpdated', monitoredWords);
+    if (admin && (admin.role === 'admin' || admin.role === 'super')) {
+      socket.emit('filterAlertsList', filterAlerts);
+    }
+  });
+
+  socket.on('getFilterAlerts', () => {
+    const admin = users.find((u) => u.id === socket.id);
+    if (!admin || (admin.role !== 'admin' && admin.role !== 'super')) return;
+    socket.emit('filterAlertsList', filterAlerts);
+  });
+
+  socket.on('clearFilterAlerts', () => {
+    const admin = users.find((u) => u.id === socket.id);
+    if (!admin || (admin.role !== 'admin' && admin.role !== 'super')) {
+      socket.emit('systemAlert', 'عفواً، صلاحية مسح سجل الفلتر محصورة بالإدارة فقط.');
+      return;
+    }
+    filterAlerts.length = 0;
+    io.emit('filterAlertsList', []);
+    socket.emit('systemAlert', 'تم تفريغ ومسح سجل تنبيهات الفلتر بنجاح 🧹');
   });
 
   socket.on('getMonitoredWords', () => {
