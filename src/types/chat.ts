@@ -34,6 +34,7 @@ export interface User {
   wallpaper?: string;
   bubbleStyle?: string;
   isPmDisabled?: boolean;
+  isGhost?: boolean; // حالة الدخول المخفي / المتخفي
   engagement?: MemberEngagement;
 }
 

@@ -369,6 +369,43 @@ export default function App() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Ghost Login State (الدخول المخفي)
+  const [isGhostLogin, setIsGhostLogin] = useState(false);
+  const [canUseGhostLogin, setCanUseGhostLogin] = useState(false);
+
+  // Check ghost login permission whenever username changes
+  useEffect(() => {
+    const clean = usernameInput.trim();
+    if (!clean || activeTab === 'visitor') {
+      setCanUseGhostLogin(false);
+      setIsGhostLogin(false);
+      return;
+    }
+
+    if (socket && socket.connected) {
+      socket.emit('checkGhostPermission', { username: clean }, (res: { allowed: boolean }) => {
+        if (res && typeof res.allowed === 'boolean') {
+          setCanUseGhostLogin(res.allowed);
+          if (!res.allowed) setIsGhostLogin(false);
+        }
+      });
+    }
+  }, [usernameInput, activeTab, socket]);
+
+  useEffect(() => {
+    if (!socket) return;
+    const handleGhostResult = ({ username, allowed }: { username: string; allowed: boolean }) => {
+      if (usernameInput.trim().toLowerCase() === (username || '').toLowerCase()) {
+        setCanUseGhostLogin(Boolean(allowed));
+        if (!allowed) setIsGhostLogin(false);
+      }
+    };
+    socket.on('ghostPermissionResult', handleGhostResult);
+    return () => {
+      socket.off('ghostPermissionResult', handleGhostResult);
+    };
+  }, [socket, usernameInput]);
+
   // Last 10 Logins & Active list tab on login screen
   const [recentLogins, setRecentLogins] = useState<RecentLoginEntry[]>([]);
   const [loginListTab, setLoginListTab] = useState<'online' | 'recent'>('online');
@@ -3329,7 +3366,8 @@ export default function App() {
       password: passwordInput,
       flag: detectedFlag,
       statusQuote: defaultQuote,
-      deviceFingerprint: clientFingerprint
+      deviceFingerprint: clientFingerprint,
+      isGhost: Boolean(isGhostLogin && canUseGhostLogin)
     });
   };
 
@@ -4826,7 +4864,7 @@ export default function App() {
                 />
               </div>
 
-              <div className="flex gap-2">
+              <div className="flex items-center gap-1.5">
                 <div className="relative flex-1">
                   <input
                     type={showPassword ? 'text' : 'password'}
@@ -4848,11 +4886,36 @@ export default function App() {
                   </button>
                 </div>
 
+                {/* زر مخفي - يظهر فقط إذا كان المستخدم يملك صلاحية الدخول المخفي */}
+                {canUseGhostLogin && (
+                  <button
+                    type="button"
+                    onClick={() => setIsGhostLogin(!isGhostLogin)}
+                    className={`h-[38px] px-2.5 rounded border text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer select-none shrink-0 ${
+                      isGhostLogin
+                        ? 'bg-amber-500 hover:bg-amber-600 text-slate-950 border-amber-600 shadow-sm ring-2 ring-amber-400/50'
+                        : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300'
+                    }`}
+                    title="تفعيل الدخول المخفي (الدخول دون إشعار ودون الظهور بالمتواجدين للعامة)"
+                  >
+                    <span
+                      className={`w-4 h-4 rounded flex items-center justify-center text-[10px] font-black border transition-all ${
+                        isGhostLogin
+                          ? 'bg-slate-950 text-amber-400 border-slate-950'
+                          : 'border-slate-400 bg-white text-transparent'
+                      }`}
+                    >
+                      {isGhostLogin ? '✓' : ''}
+                    </span>
+                    <span>مخفي</span>
+                  </button>
+                )}
+
                 {/* Styled [دخول] button */}
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className={`px-6 py-2 ${curTheme.primaryBtn || 'bg-[#2d251f] hover:bg-[#1f1915] text-amber-200'} font-bold text-sm rounded shadow cursor-pointer active:scale-95 transition-all`}
+                  className={`h-[38px] px-5 ${curTheme.primaryBtn || 'bg-[#2d251f] hover:bg-[#1f1915] text-amber-200'} font-bold text-sm rounded shadow cursor-pointer active:scale-95 transition-all shrink-0`}
                 >
                   {isSubmitting ? 'جاري...' : 'دخول'}
                 </button>
@@ -6345,6 +6408,16 @@ export default function App() {
                 : 'LIVE'}
             </span>
           </button>
+
+          {/* Ghost Mode Indicator for Current User */}
+          {currentUser?.isGhost && (
+            <span
+              className="h-10 px-2 rounded-md bg-purple-900/90 text-purple-200 border border-purple-500/70 text-[10px] font-black flex items-center gap-1 shadow flex-shrink-0 animate-pulse"
+              title="أنت متصل بالوضع المخفي (لا تظهر للمستخدمين العاديين ولا ترسل إشعار دخول)"
+            >
+              👻 مخفي
+            </span>
+          )}
 
           {/* Connection Status Pill with Ping */}
           <button
@@ -8902,6 +8975,7 @@ export default function App() {
                             )}
                             {u.role === 'admin' && <span className="text-[10px] text-red-400 font-bold">★ إدارة</span>}
                             {u.role === 'super' && <span className="text-[10px] text-amber-400 font-bold">★ سوبر</span>}
+                            {u.isGhost && <span className="text-[10px] text-purple-400 font-bold bg-purple-950/70 px-1.5 py-0.2 rounded border border-purple-500/50">👻 مخفي</span>}
                             {isUserIgnored(u.username) && (
                               <span className="px-1.5 py-0.2 rounded bg-rose-950 text-rose-300 text-[9px] font-black">
                                 🚫 متجاهل
@@ -9009,6 +9083,7 @@ export default function App() {
                               )}
                               {u.role === 'admin' && <span className="text-[10px] text-red-400 font-bold">★ إدارة</span>}
                               {u.role === 'super' && <span className="text-[10px] text-amber-400 font-bold">★ سوبر</span>}
+                              {u.isGhost && <span className="text-[10px] text-purple-400 font-bold bg-purple-950/70 px-1.5 py-0.2 rounded border border-purple-500/50">👻 مخفي</span>}
                               {isSelf && (
                                 <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/25 text-amber-300 font-bold border border-amber-500/50">
                                   أنت (حسابك)

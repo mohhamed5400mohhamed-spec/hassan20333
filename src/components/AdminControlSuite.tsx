@@ -3631,7 +3631,8 @@ export const AdminControlSuite: React.FC<AdminControlSuiteProps> = ({
                   { key: 'canManageShortcuts', label: 'إدارة الاختصارات الذكية', desc: 'إضافة وتعديل اختصارات الشات' },
                   { key: 'canChangeGlobalTheme', label: 'تعميم الثيم والخط العام', desc: 'تطبيق الثيم والخط على جميع الأعضاء' },
                   { key: 'canTakeMic', label: 'الصعود للمايك', desc: 'حجز مايك والتحدث صوتياً' },
-                  { key: 'canSendMedia', label: 'إرسال الصور والوسائط والصوت', desc: 'إرسال الصور والفيديوهات والتسجيل الصوتي' }
+                  { key: 'canSendMedia', label: 'إرسال الصور والوسائط والصوت', desc: 'إرسال الصور والفيديوهات والتسجيل الصوتي' },
+                  { key: 'canGhostLogin', label: 'صلاحية الدخول المخفي', desc: 'إمكانية الدخول المتخفي والمخفي من واجهة تسجيل الدخول دون إشعار دخول وبدون الظهور للعامة' }
                 ];
 
                 return (

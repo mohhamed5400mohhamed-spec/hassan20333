@@ -458,6 +458,7 @@ export interface ConnectedUser {
   nameBannerUrl?: string; // رابط البنر / السوابر المصور للعضو بمقاس 500x50 كبديل لاسمه
   giftBadges?: string[]; // قائمة أيقونات الهدايا والأوسمة التكريمية بجانب الاسم
   isPmDisabled?: boolean;
+  isGhost?: boolean; // حالة الدخول المخفي / المتخفي
   isJailed?: boolean;
   joinedAt: number;
   sessionToken?: string;
@@ -1189,6 +1190,8 @@ export interface RolePermissions {
   canChangeGlobalTheme: boolean;// تغيير الثيم والخط العام للشات
   canRevealNicks: boolean;      // كشف النكات وتعدد العضويات
   canEditMemberData: boolean;   // تعديل بيانات ورتب الأعضاء
+  canGhostLogin?: boolean;      // صلاحية الدخول المخفي
+  [key: string]: boolean | undefined;
 }
 
 export let rolePermissions: Record<string, RolePermissions> = {
@@ -1206,7 +1209,8 @@ export let rolePermissions: Record<string, RolePermissions> = {
     canManageShortcuts: true,
     canChangeGlobalTheme: true,
     canRevealNicks: true,
-    canEditMemberData: true
+    canEditMemberData: true,
+    canGhostLogin: true
   },
   super: {
     canFilter: true,
@@ -1222,7 +1226,8 @@ export let rolePermissions: Record<string, RolePermissions> = {
     canManageShortcuts: true,
     canChangeGlobalTheme: true,
     canRevealNicks: true,
-    canEditMemberData: false
+    canEditMemberData: false,
+    canGhostLogin: true
   },
   member: {
     canFilter: false,
@@ -1238,7 +1243,8 @@ export let rolePermissions: Record<string, RolePermissions> = {
     canManageShortcuts: false,
     canChangeGlobalTheme: false,
     canRevealNicks: false,
-    canEditMemberData: false
+    canEditMemberData: false,
+    canGhostLogin: false
   },
   guest: {
     canFilter: false,
@@ -1254,7 +1260,8 @@ export let rolePermissions: Record<string, RolePermissions> = {
     canManageShortcuts: false,
     canChangeGlobalTheme: false,
     canRevealNicks: false,
-    canEditMemberData: false
+    canEditMemberData: false,
+    canGhostLogin: false
   }
 };
 
@@ -1368,6 +1375,13 @@ export function loadRolePermissions() {
     const parsed = dataManager.loadRolePermissionsSync<Record<string, RolePermissions>>(rolePermissions);
     if (parsed && typeof parsed === 'object') {
       Object.assign(rolePermissions, parsed);
+      for (const r of ['admin', 'super', 'member', 'guest']) {
+        if (rolePermissions[r]) {
+          if (rolePermissions[r].canGhostLogin === undefined) {
+            rolePermissions[r].canGhostLogin = (r === 'admin' || r === 'super');
+          }
+        }
+      }
     }
   } catch (err) {
     console.error('Error loading role permissions:', err);
@@ -1819,6 +1833,49 @@ export function getAllRegisteredMembersPayload() {
 
 // Connected live users store (الأعضاء الفعليون المتواجدون فقط بدون وهمي)
 const users: ConnectedUser[] = [];
+
+// Broadcast room users with Ghost login privacy filtering (المخفي يظهر لنفسه وللإدارة فقط)
+export function broadcastRoomUsers(room: string) {
+  if (!room) return;
+  const roomUsersList = users.filter((u) => u.room === room);
+  const socketsInRoom = io.sockets.adapter.rooms.get(room);
+  if (!socketsInRoom) return;
+
+  for (const socketId of socketsInRoom) {
+    const s = io.sockets.sockets.get(socketId);
+    if (!s) continue;
+    const recipient = users.find((u) => u.id === socketId);
+    const isAdminOrSuper = recipient && (recipient.role === 'admin' || recipient.role === 'super');
+    const filtered = roomUsersList.filter((u) => {
+      if (!u.isGhost) return true;
+      if (isAdminOrSuper) return true;
+      if (u.id === socketId) return true;
+      return false;
+    });
+    s.emit('roomUsers', {
+      room,
+      users: filtered
+    });
+  }
+}
+
+// Broadcast global presence snapshot with Ghost login privacy filtering (المخفي يظهر لنفسه وللإدارة فقط)
+export function broadcastAllUsers() {
+  const allPresence = getPresenceSnapshot();
+  for (const [socketId, s] of io.sockets.sockets.entries()) {
+    const recipient = users.find((u) => u.id === socketId);
+    const isAdminOrSuper = recipient && (recipient.role === 'admin' || recipient.role === 'super');
+    const filtered = allPresence.filter((u) => {
+      if (!u.isGhost) return true;
+      if (isAdminOrSuper) return true;
+      if (u.id === socketId) return true;
+      return false;
+    });
+    s.emit('allUsers', filtered);
+    const onlineCount = filtered.filter((u) => u.presenceState !== 'offline').length;
+    s.emit('onlineCountUpdated', onlineCount);
+  }
+}
 
 // IP Address to accounts / nicknames mapping (كشف النكات والآي بي والعضويات)
 const ipToAccountsMap: Map<string, Set<string>> = new Map();
@@ -2992,6 +3049,26 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Check Ghost Login Permission for login screen (فحص صلاحية الدخول المخفي للاسم قبل الدخول)
+  socket.on('checkGhostPermission', ({ username }: { username: string }, callback?: (res: { allowed: boolean }) => void) => {
+    const clean = sanitizeText(username || '').trim();
+    if (!clean) {
+      if (typeof callback === 'function') callback({ allowed: false });
+      socket.emit('ghostPermissionResult', { username: '', allowed: false });
+      return;
+    }
+    const reg = registeredMembers[clean] || registeredMembers[clean.toLowerCase()];
+    let role = 'member';
+    if (clean.toLowerCase() === 'sajan' || clean.toLowerCase() === 'admin') {
+      role = 'admin';
+    } else if (reg) {
+      role = reg.role;
+    }
+    const allowed = Boolean(rolePermissions[role]?.canGhostLogin);
+    if (typeof callback === 'function') callback({ allowed });
+    socket.emit('ghostPermissionResult', { username: clean, allowed });
+  });
+
   // Global Appearance Listeners (التطبيق العام للثيم والخط والخلفية)
   socket.on('getGlobalAppearance', () => {
     socket.emit('globalAppearanceUpdated', globalAppearance);
@@ -3966,7 +4043,8 @@ io.on('connection', (socket) => {
     password,
     flag,
     statusQuote,
-    deviceFingerprint
+    deviceFingerprint,
+    isGhost
   }: {
     username: string;
     room?: string;
@@ -3975,6 +4053,7 @@ io.on('connection', (socket) => {
     flag?: string;
     statusQuote?: string;
     deviceFingerprint?: string;
+    isGhost?: boolean;
   }) => {
     const cleanUsername = sanitizeText(username);
     // Automatic default room: 'الغرفة العامة'
@@ -4304,6 +4383,10 @@ io.on('connection', (socket) => {
 
     const userSessionToken = `token_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 
+    const userRole = reg?.role || (cleanUsername.toLowerCase() === 'sajan' ? 'admin' : loginType === 'visitor' ? 'guest' : 'member');
+    const canGhost = Boolean(rolePermissions[userRole]?.canGhostLogin);
+    const isGhostUser = Boolean(isGhost && canGhost);
+
     const newUser: ConnectedUser = {
       id: socket.id,
       username: cleanUsername,
@@ -4312,7 +4395,7 @@ io.on('connection', (socket) => {
       avatarUrl: reg?.avatarUrl || undefined,
       statusQuote: userQuote,
       flag: realFlag,
-      role: reg?.role || (cleanUsername.toLowerCase() === 'sajan' ? 'admin' : loginType === 'visitor' ? 'guest' : 'member'),
+      role: userRole,
       likes: reg ? reg.likes : 500,
       points: reg ? reg.points : 2500,
       honorBadge: reg?.honorBadge || undefined,
@@ -4326,6 +4409,7 @@ io.on('connection', (socket) => {
       deviceInfo: clientDevice,
       deviceFingerprint: clientFingerprint,
       isJailed: isUserJailed,
+      isGhost: isGhostUser,
       joinedAt: Date.now(),
       sessionToken: userSessionToken,
       lastActiveTime: Date.now(),
@@ -4357,20 +4441,23 @@ io.on('connection', (socket) => {
     users.unshift(newUser);
     socket.join(finalTargetRoom);
 
-    logMonitorEvent('join', `دخل ${newUser.username} إلى ${newUser.room} (العلم: ${realFlag} - IP: ${clientIp})`, newUser.username);
+    if (isGhostUser) {
+      logMonitorEvent('join', `دخل ${newUser.username} إلى ${newUser.room} متخفياً (دخول مخفي 👻) (العلم: ${realFlag} - IP: ${clientIp})`, newUser.username);
+    } else {
+      logMonitorEvent('join', `دخل ${newUser.username} إلى ${newUser.room} (العلم: ${realFlag} - IP: ${clientIp})`, newUser.username);
+      recordRecentLogin({
+        username: newUser.username,
+        avatarUrl: newUser.avatarUrl,
+        flag: newUser.flag,
+        room: newUser.room,
+        role: newUser.role,
+        timestamp: Date.now(),
+        time: getCurrentTimeString()
+      });
+    }
 
     // Always emit roomJoined so client updates room state
     socket.emit('roomJoined', { user: newUser });
-
-    recordRecentLogin({
-      username: newUser.username,
-      avatarUrl: newUser.avatarUrl,
-      flag: newUser.flag,
-      room: newUser.room,
-      role: newUser.role,
-      timestamp: Date.now(),
-      time: getCurrentTimeString()
-    });
 
     // If this is a new login session (not just changing rooms with the same socket), emit loginSuccess
     const isNewLogin = !previousRoom || Boolean(loginType);
@@ -4404,23 +4491,25 @@ io.on('connection', (socket) => {
       offlinePrivateMessages.delete(cleanUsername.toLowerCase());
     }
 
-    // Broadcast entry message in chat stream with user name
-    const entryMessage: StoredMessage = {
-      id: `enter-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      room: finalTargetRoom,
-      username: cleanUsername,
-      avatarUrl: newUser.avatarUrl,
-      nameBannerUrl: newUser.nameBannerUrl,
-      flag: newUser.flag,
-      badge: `${finalTargetRoom} Room | دخل الى`,
-      badgeColor: 'text-amber-400',
-      text: `دخل ${cleanUsername} إلى ${finalTargetRoom} أهلاً وسهلاً 🦅`,
-      time: getCurrentTimeString(),
-      timestamp: Date.now()
-    };
-    chatHistory.push(entryMessage);
-    saveHistory();
-    io.to(finalTargetRoom).emit('message', entryMessage);
+    // Broadcast entry message in chat stream with user name (مستثنى في حالة الدخول المخفي)
+    if (!newUser.isGhost) {
+      const entryMessage: StoredMessage = {
+        id: `enter-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        room: finalTargetRoom,
+        username: cleanUsername,
+        avatarUrl: newUser.avatarUrl,
+        nameBannerUrl: newUser.nameBannerUrl,
+        flag: newUser.flag,
+        badge: `${finalTargetRoom} Room | دخل الى`,
+        badgeColor: 'text-amber-400',
+        text: `دخل ${cleanUsername} إلى ${finalTargetRoom} أهلاً وسهلاً 🦅`,
+        time: getCurrentTimeString(),
+        timestamp: Date.now()
+      };
+      chatHistory.push(entryMessage);
+      saveHistory();
+      io.to(finalTargetRoom).emit('message', entryMessage);
+    }
 
     // Send welcome greeting for this user
     const currentRoomObj = chatRooms.find((r) => r.id === finalTargetRoom);
@@ -4455,42 +4544,37 @@ io.on('connection', (socket) => {
       });
     }
 
-    // Broadcast roomUsers to the newly entered room
-    io.to(finalTargetRoom).emit('roomUsers', {
-      room: finalTargetRoom,
-      users: users.filter((u) => u.room === finalTargetRoom)
-    });
+    // Broadcast roomUsers to the newly entered room (filtered for ghost mode)
+    broadcastRoomUsers(finalTargetRoom);
 
     // If switching from another room, broadcast transfer departure to previous room and update users
     if (previousRoom && previousRoom !== finalTargetRoom && previousRoom !== 'خارج الغرف') {
-      const switchLeaveMessage: StoredMessage = {
-        id: `leave-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-        room: previousRoom,
-        username: cleanUsername,
-        avatarUrl: newUser.avatarUrl,
-        nameBannerUrl: newUser.nameBannerUrl,
-        flag: newUser.flag,
-        badge: `${finalTargetRoom} | انتقل إلى`,
-        badgeColor: 'text-amber-400',
-        text: `غادر ${cleanUsername} وانتقل إلى غرفة [${finalTargetRoom}] 🚪`,
-        time: getCurrentTimeString(),
-        timestamp: Date.now()
-      };
-      chatHistory.push(switchLeaveMessage);
-      pruneRoomChatHistory(previousRoom);
-      saveHistory();
-      io.to(previousRoom).emit('message', switchLeaveMessage);
+      if (!newUser.isGhost) {
+        const switchLeaveMessage: StoredMessage = {
+          id: `leave-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          room: previousRoom,
+          username: cleanUsername,
+          avatarUrl: newUser.avatarUrl,
+          nameBannerUrl: newUser.nameBannerUrl,
+          flag: newUser.flag,
+          badge: `${finalTargetRoom} | انتقل إلى`,
+          badgeColor: 'text-amber-400',
+          text: `غادر ${cleanUsername} وانتقل إلى غرفة [${finalTargetRoom}] 🚪`,
+          time: getCurrentTimeString(),
+          timestamp: Date.now()
+        };
+        chatHistory.push(switchLeaveMessage);
+        pruneRoomChatHistory(previousRoom);
+        saveHistory();
+        io.to(previousRoom).emit('message', switchLeaveMessage);
+      }
 
-      io.to(previousRoom).emit('roomUsers', {
-        room: previousRoom,
-        users: users.filter((u) => u.room === previousRoom)
-      });
+      broadcastRoomUsers(previousRoom);
     }
 
     // Authoritative global snapshot broadcast so every client sees updated rooms and presence
-    io.emit('allUsers', getPresenceSnapshot());
+    broadcastAllUsers();
     io.emit('allRegisteredMembers', getAllRegisteredMembersPayload());
-    io.emit('onlineCountUpdated', getPresenceSnapshot().filter((u) => u.presenceState !== 'offline').length);
 
     // Send admin data only to admin/super users
     if (newUser.role === 'admin' || newUser.role === 'super') {
